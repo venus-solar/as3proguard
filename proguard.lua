@@ -12,7 +12,7 @@ DEBUG_VERBOSE = 1
 DEBUG_DEBUG = 2
 DEBUG_WARN = 3
 DEBUG_ERROR = 4
-DEBUG_LV = DEBUG_WARN
+DEBUG_LV = DEBUG_DEBUG
 DEBUG_ENABLE = true
 
 PATTERN1 = "private var "
@@ -52,8 +52,8 @@ end
 function print_help()
 	local help_info = [[
 lua proguad.lua -i INDIR -b INBIN -o OUTNAME -n WORDLEN -h
-	-i) input directory for scan, must have 
-	-b) input binary for proguard, must have 
+	-i) input directory for scan, must have
+	-b) input binary for proguard, must have
 	-o) outname, option
 	-n) word length, the higher, the easier to succeed and reverse engineering hack
 	-h) print this help info
@@ -63,11 +63,11 @@ end
 
 function create_map()
 	for i = 1, string.byte("Z") - string.byte("A") + 1 do
-		dict [i] = string.char(string.byte("A") + i - 1)
+		dict [#dict + 1] = string.char(string.byte("A") + i - 1)
 	end
 
 	for i = 1, string.byte("z") - string.byte("a") + 1 do
-		dict [i] = string.char(string.byte("a") + i - 1)
+		dict [#dict + 1] = string.char(string.byte("a") + i - 1)
 	end
 
 	dict[#dict + 1] = "?"
@@ -90,7 +90,7 @@ function parse_parameters()
 		elseif (arg[i] == "-o") then
 			OUTNAME = arg[i+1]
 		elseif (arg[i] == "-n") then
-			WORDLEN = arg[i+1]
+			WORDLEN = tonumber(arg[i+1])
 		elseif (arg[i] == "-h") then
 			PRINT_HELP = true
 			stop_proceed = true
@@ -124,10 +124,15 @@ end
 function scan_createtables_win(_dir)
 	logv("scan_createtables_win +++")
 	local i, fList = 0, {}
-	for fname in io.popen("dir " .. _dir .. "\\*.as" .. " /b") : lines() do
+	for fname in io.popen("dir " .. _dir .. "\\*.as" .. " /s /b") : lines() do
 		i = i + 1
 		fList[i] = fname
 	end
+	logd("dump fList +++")
+	for i = 1, #fList do
+		logd(fList[i])
+	end
+	logd("dump fList ---")
 	logv("scan_createtables_win ---")
 	return fList
 end
@@ -135,11 +140,11 @@ end
 function scan_createtables_linux(_dir)
 	logv("scan_createtables_linux +++")
 	local i, fList = 0, {}
-	for fname in io.popen("ls -d " .. _dir .. "/*.as") : lines() do
+	for fname in io.popen("find " .. _dir .. " -name *.as") : lines() do
 		i = i + 1
 		fList[i] = fname
 	end
-	logv("scan_createtables_linux ---") 
+	logv("scan_createtables_linux ---")
 	return fList
 end
 
@@ -168,28 +173,33 @@ function scan_createtables(_dir)
 		local fIn = io.open(fList[i], "r")
 		local fInData = fIn:read("*a")
 
-		for fVar in string.gmatch(fInData, PATTERN1 .. "%w") do
-			fVarList[fVar] = true
+		for fVar in string.gmatch(fInData, PATTERN1 .. "(%w+)") do
+			fVarList[#fVarList + 1] = {origin=fVar, rep=fVar}
 		end
 
-		for fVar in string.gmatch(fInData, PATTERN2 .. "%w") do
-			fVarList[fVar] = true
+		for fVar in string.gmatch(fInData, PATTERN2 .. "(%w+)") do
+			fVarList[#fVarList + 1] = {origin=fVar, rep=fVar}
 		end
 
-		for fVar in string.gmatch(fInData, PATTERN3 .. "%w") do
-			fVarList[fVar] = true
+		for fVar in string.gmatch(fInData, PATTERN3 .. "(%w+)") do
+			fVarList[#fVarList + 1] = {origin=fVar, rep=fVar}
 		end
 
-		for fVar in string.gmatch(fInData, PATTERN4 .. "%w") do
-			fVarList[fVar] = true
+		for fVar in string.gmatch(fInData, PATTERN4 .. "(%w+)") do
+			fVarList[#fVarList + 1] = {origin=fVar, rep=fVar}
 		end
 		io.close(fIn)
 	end
 
 	-- sort from longest to shortest
-	table.sort(fVarList, function (a, b) return string.len(a) > string.len(b) end)
+	table.sort(fVarList, function (a, b) return string.len(a[origin]) > string.len(b[origin]) end)
 
 	-- calc random tables
+	for i = 1, #fVarList do
+		local randomV = proguard_gen(fVarList[i][origin])
+		fVarList[i][rep] = randomV
+	end
+
 	for k, _ in pairs(fVarList) do
 		local randomV = proguard_gen(k)
 		fVarList[k] = randomV
@@ -206,34 +216,33 @@ function scan_createtables(_dir)
 	fTable:write(fTableS)
 	io.close(fTable)
 	logv("generate random table file ---")
+
 	logv("scan_createtables ---")
 end
 
 function proguard_bin(_table, _bin)
 	logv("proguard_bin +++")
-	local fBin = io.open(INBIN, "r")
+	local fBin = io.open(INBIN, "rb")
 	local fBinData = fBin:read("*a")
 	for k, v in pairs(_table) do
 		string.gsub(fBinData, k, v)
 	end
-	local fBinOut = io.open(OUTNAME, "w")
+	local fBinOut = io.open(OUTNAME, "wb")
 	fBinOut:write(fBinData)
 	io.close(fBin)
 	io.close(fBinOut)
-	logv("proguard_bin ---") 
+	logv("proguard_bin ---")
 end
 
 function main()
 	parse_parameters()
 
-	if (PRINT_HELP) then
-		print_help()
-	end
-
 	if (not stop_proceed) then
 		create_map()
 		scan_createtables(INDIR)
 		proguard_bin(fVarList, INBIN)
+	elseif PRINT_HELP then
+		print_help()
 	else
 		logw("stop proceed, check your parameters!")
 	end
